@@ -1,0 +1,12 @@
+# IDE
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+
+# Arquivos pesados / banco
+*.gdb/
+
+# Sistema
+.DS_Store
