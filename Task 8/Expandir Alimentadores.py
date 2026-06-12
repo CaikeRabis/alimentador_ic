@@ -9,11 +9,15 @@ import contextily as ctx
 gdb_path = r"C:\Users\Usuario\PycharmProjects\CircuitosTestesEx5\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
 
 alimentadores = [
-    "ES11",
-    "ES12",
-    "ES10",
-    "ES08",
-    "ES09"
+    "02_BGC1", "02_BGC2", "02_BGC3",
+    "0607", "0613", "0614", "0615",
+    "BC39", "BC_06C2",
+    "BG_01C1", "BG_01C2", "BG_01C3",
+    "EN09", "EN10", "EN11", "EN13",
+    "ES07", "ES08", "ES09",
+    "ES13", "ES14", "ES15", "ES16", "ES17", "ES18",
+    "ES21", "ES22", "ES23", "ES24",
+    "HP02", "HP03"
 ]
 
 csv_folder = r"C:\Users\usuario\PycharmProjects\bdgdbrasilia"
@@ -26,7 +30,6 @@ cenarios = [
 ]
 
 
-# --- FUNÇÕES AUXILIARES ---
 def bus(x):
     return str(x).strip().upper().replace("KV", "").replace(" ", "")
 
@@ -57,7 +60,6 @@ print(ssdmt_total["CTMT"].value_counts())
 print("========================\n")
 
 resultados_por_alimentador = {}
-
 
 # --- SIMULAÇÃO POR ALIMENTADOR ---
 for alim_id in alimentadores:
@@ -90,12 +92,10 @@ for alim_id in alimentadores:
         mult = ".3 .2 .2 .2 .3 .4 .4 .5 .6 .7 .8 .9 1 .9 .8 .7 .8 .9 1 1.2 1.1 .9 .7 .5"
         dss.text(f"New Loadshape.dia_tipo npts=24 interval=1 mult=({mult})")
 
-        # Criar Linhas
         for _, row in ssdmt.iterrows():
             b1 = bus(row["PAC_1"])
             b2 = bus(row["PAC_2"])
             cod = clean_id(row["COD_ID"])
-
             length = max(float(row["Shape_Length"]) / 1000, 0.001)
 
             if length < 0.1:
@@ -112,7 +112,6 @@ for alim_id in alimentadores:
                 f"r1={r1 * 1.5} x1={x1 * 1.3}"
             )
 
-        # Criar Chaves
         for _, row in unsemt.iterrows():
             b1 = bus(row["PAC_1"])
             b2 = bus(row["PAC_2"])
@@ -124,7 +123,6 @@ for alim_id in alimentadores:
                 f"length=0.001 r1=0.001 x1=0.001"
             )
 
-        # Criar Transformadores e Cargas
         for _, row in untrmt.iterrows():
             bus_mt = bus(row["PAC_1"])
             cod = clean_id(row["COD_ID"])
@@ -151,17 +149,14 @@ for alim_id in alimentadores:
                 f"pf=0.92 daily=dia_tipo"
             )
 
-        # Adicionar Carga Crítica
         if add_carga_fim:
             ponta_alimentador = bus(ssdmt.iloc[-1]["PAC_2"])
-
             dss.text(
                 f"New Load.GRANDE_CARGA "
                 f"bus1={ponta_alimentador} "
                 f"phases=3 kv=13.8 kw=5000 pf=0.95"
             )
 
-        # Solução
         dss.text("Set VoltageBases=[13.8, 0.38]")
         dss.text("CalcVoltageBases")
         dss.text("Reset")
@@ -172,9 +167,7 @@ for alim_id in alimentadores:
 
         dss.text(f"cd {csv_folder}")
 
-        # Exportar Tensões
         dss.text("Export Voltages")
-
         arquivo_v = os.path.join(csv_folder, f"{alim_id}_EXP_VOLTAGES.CSV")
 
         if not os.path.exists(arquivo_v):
@@ -217,9 +210,7 @@ for alim_id in alimentadores:
             print(f"Tensão na Ponta: {v_ponta:.4f} p.u. (~ {v_ponta * 13.8:.2f} kV)")
             print("=========================================\n")
 
-        # Exportar Correntes
         dss.text("Export Currents")
-
         arquivo_i = os.path.join(csv_folder, f"{alim_id}_EXP_CURRENTS.CSV")
 
         if not os.path.exists(arquivo_i):
@@ -300,41 +291,45 @@ for alim_id, resultados in resultados_por_alimentador.items():
 # --- MAPA COM TODOS OS ALIMENTADORES ---
 print("\nGerando mapa georreferenciado com todos os alimentadores...")
 
-plt.figure(figsize=(14, 12))
+plt.figure(figsize=(18, 14))
 ax = plt.gca()
 
-# Cores fortes para destacar no mapa
-cores_alimentadores = {
-    "ES11": "#0066FF",  # azul
-    "ES12": "#FF8800",  # laranja
-    "ES10": "#00AA00",  # verde
-    "ES08": "#AA00FF",  # roxo
-    "ES09": "#FF0000"   # vermelho
-}
-
-# Converter tudo para Web Mercator
 ssdmt_web = ssdmt_total.to_crs(epsg=3857)
 
-# Plota cada alimentador separadamente, com cor fixa
+cmap = plt.get_cmap("tab20", len(alimentadores))
+
+cores_alimentadores = {
+    alim: cmap(i)
+    for i, alim in enumerate(alimentadores)
+}
+
 for alim in alimentadores:
     rede = ssdmt_web[ssdmt_web["CTMT"] == alim]
 
+    if rede.empty:
+        continue
+
     rede.plot(
         ax=ax,
-        color=cores_alimentadores.get(alim, "black"),
-        linewidth=3.5,
+        color=cores_alimentadores[alim],
+        linewidth=3,
         alpha=0.95,
         label=alim
     )
 
-# Mapa base mais claro, para a rede aparecer melhor
 ctx.add_basemap(
     ax,
     source=ctx.providers.CartoDB.Positron
 )
 
 plt.title("Mapa Real do Sistema de Distribuição - Alimentadores Selecionados")
-plt.legend(title="Alimentadores")
+plt.legend(
+    title="Alimentadores",
+    fontsize=7,
+    ncol=3,
+    loc="upper left"
+)
+
 plt.show()
 
 print("\nTask 7 ampliada com sucesso!")

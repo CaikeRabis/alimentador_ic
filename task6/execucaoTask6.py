@@ -1,7 +1,7 @@
 import geopandas as gpd
 import py_dss_interface
 
-gdb_path = r"/Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb/Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
+gdb_path = r"C:\Users\Usuario\PycharmProjects\CircuitosTestesEx5\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
 alim_id = "ES01"
 
 dss = py_dss_interface.DSS()

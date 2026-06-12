@@ -69,7 +69,7 @@ alim = ctmt.iloc[0]
 # """)
 #
 # # Rodar fluxo de potência
-# dss.text("Solve")
+# dss.text("")
 #
 # # ================= RESULTADOS =================
 #
