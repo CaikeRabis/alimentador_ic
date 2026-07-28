@@ -11,13 +11,13 @@ import numpy as np
 # CONFIGURAÇÕES
 # ============================================================
 
-gdb_path = r"C:\Users\Usuario\PycharmProjects\CircuitosTestesEx5\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
+gdb_path = r"C:\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
 
 alimentadores = [
-     '0607', '0613', '0614', '0615',
+     'NW11'
 ]
 
-csv_folder = r"C:\Users\usuario\PycharmProjects\bdgdbrasilia"
+csv_folder = r"C:\Users\caike\PycharmProjects\bdgdbrasilia"
 horario_pico = 19
 
 # 0.60 = condição inicial de 60% da potência nominal dos transformadores
