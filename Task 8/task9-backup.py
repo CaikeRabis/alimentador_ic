@@ -30,37 +30,8 @@ import py_dss_interface
 GDB_PATH = r"C:\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
 PASTA_SAIDA = r"C:\Users\adm\Documents\Analise-Alimentador\alimentador_ic"
 
-CODIGO_ALIMENTADOR_RESIDENCIAL = "CN15"
+ALIMENTADORES = ["NW08"]
 
-ALIMENTADORES_ESTUDO = {
-    "NW08": {
-        "codigo": "NW08",
-        "perfil": "Industrial/comercial",
-        "regiao": "SIA",
-        "transformador_alvo": "FP8401",
-        "descricao": (
-            "Alimentador representativo de área predominantemente "
-            "industrial e comercial do Setor de Indústria e Abastecimento."
-        ),
-    },
-    "RESIDENCIAL_CEILANDIA": {
-        "codigo": CODIGO_ALIMENTADOR_RESIDENCIAL,
-        "perfil": "Residencial",
-        "regiao": "Ceilândia",
-        "transformador_alvo": None,  # Será selecionado automaticamente (~300kVA ou maior)
-        "descricao": (
-            "Alimentador representativo de área predominantemente "
-            "residencial de Ceilândia."
-        ),
-    },
-}
-
-ALIMENTADORES_ATIVOS = [
-    "NW08",
-    "RESIDENCIAL_CEILANDIA",
-]
-
-# Variáveis globais base
 TENSAO_MT_KV = 13.8
 TENSAO_BT_KV = 0.38
 
@@ -70,6 +41,9 @@ CRS_METRICO = 31983
 # [A2] PAC da saída da subestação – informe aqui se conhecido.
 # Com None o programa usa fallback topológico (PROVISÓRIO).
 PAC_INICIAL_MANUAL = None
+
+# COD_ID do transformador estudado em detalhe.
+TRANSFORMADOR_ALVO_MANUAL = "FP8401"
 
 # [A7] Tipo de simulação – snapshot estático, sem referência de horário.
 TIPO_SIMULACAO = "Snapshot estático"
@@ -1259,9 +1233,6 @@ def simular_cenario(
     trafo_alvo,
     elementos,
     distancias,
-    pasta_saida_alim,
-    distancia_max_km,
-    comprimento_total_km,
 ):
     """
     Executa um cenário no OpenDSS e retorna os resultados.
@@ -1387,31 +1358,24 @@ def simular_cenario(
     CARGA_CONN   = "wye"
     # kV, kW, pf são definidos por trafo — registrados no resultado abaixo
 
-    # --- Exportações (com limpeza prévia para evitar CSVs antigos) ---
-    import glob
-    for csv_file in glob.glob(os.path.join(pasta_saida_alim, "*EXP_*.CSV")):
-        try:
-            os.remove(csv_file)
-        except OSError:
-            pass
+    os.makedirs(PASTA_SAIDA, exist_ok=True)
+    dss.text(f'cd "{PASTA_SAIDA}"')
 
-    os.makedirs(pasta_saida_alim, exist_ok=True)
-    dss.text(f'cd "{pasta_saida_alim}"')
-
+    # --- Exportações ---
     dss.text("Export Voltages")
-    arq_v = encontrar_exportacao(pasta_saida_alim, alim_id, "VOLTAGES")
+    arq_v = encontrar_exportacao(PASTA_SAIDA, alim_id, "VOLTAGES")
     if arq_v is None:
         raise FileNotFoundError("CSV de tensões não encontrado.")
     tensoes = analisar_tensoes(pd.read_csv(arq_v), distancias)
 
     dss.text("Export Currents")
-    arq_i = encontrar_exportacao(pasta_saida_alim, alim_id, "CURRENTS")
+    arq_i = encontrar_exportacao(PASTA_SAIDA, alim_id, "CURRENTS")
     if arq_i is None:
         raise FileNotFoundError("CSV de correntes não encontrado.")
     correntes = analisar_correntes(pd.read_csv(arq_i), elementos, distancias)
 
     dss.text("Export Powers")
-    arq_p = encontrar_exportacao(pasta_saida_alim, alim_id, "POWERS")
+    arq_p = encontrar_exportacao(PASTA_SAIDA, alim_id, "POWERS")
     potencias = pd.DataFrame()
     if arq_p is not None:
         try:
@@ -1502,41 +1466,29 @@ def simular_cenario(
             print("  [Validação] AVISO: nenhum trecho (não-SW) com corrente > 0,01 A.")
 
     # -------------------------------------------------------------------
-    # Indicadores Normalizados e Cálculos Efetivos
+    # Carga efetiva: deduzida do fluxo real na fonte menos perdas
     # -------------------------------------------------------------------
     p_carga_efetiva_kw   = p_fonte_kw   - perda_kw
     q_carga_efetiva_kvar = q_fonte_kvar - perda_kvar
     s_carga_efetiva_kva  = np.hypot(p_carga_efetiva_kw, q_carga_efetiva_kvar)
 
+    # Razão carga efetiva / carga nominal comandada (%)
     razao_efetiva_nominal = (
         100.0 * p_carga_efetiva_kw / potencia_total_kw
         if potencia_total_kw > 0 else np.nan
     )
 
+    # Eficiência nominal: P_carga_nominal / (P_carga_nominal + perdas)
     eficiencia_nominal = (
         100.0 * potencia_total_kw / (potencia_total_kw + perda_kw)
         if (potencia_total_kw + perda_kw) > 0 else np.nan
     )
 
+    # Eficiência pelo fluxo efetivo: P_carga_efetiva / P_fonte   ← indicador principal
     eficiencia_fluxo = (
         100.0 * p_carga_efetiva_kw / p_fonte_kw
         if p_fonte_kw > 0 else np.nan
     )
-    
-    # 1. Perdas relativas à fonte
-    perdas_fonte_pct = (100.0 * perda_kw / p_fonte_kw) if p_fonte_kw > 0 else np.nan
-    # 2. Perdas relativas à carga efetiva
-    perdas_carga_pct = (100.0 * perda_kw / p_carga_efetiva_kw) if p_carga_efetiva_kw > 0 else np.nan
-    # 3. Corrente por MVA instalado
-    corrente_por_mva = i_fonte_calc / (potencia_total_kva / 1000.0) if potencia_total_kva > 0 else np.nan
-    # 4. Potência instalada por quilômetro
-    potencia_kva_por_km = potencia_total_kva / comprimento_total_km if comprimento_total_km > 0 else np.nan
-    # 5. Transformadores por quilômetro
-    trafos_por_km = trafos_modelados / comprimento_total_km if comprimento_total_km > 0 else np.nan
-    # 6. Queda de tensão global (pu)
-    queda_tensao_pu = v_fonte_pu - tensao_min if v_fonte_pu is not None else np.nan
-    # 7. Queda de tensão por quilômetro
-    queda_tensao_por_km = queda_tensao_pu / distancia_max_km if pd.notna(queda_tensao_pu) and distancia_max_km > 0 else np.nan
 
     # --- Impressão do bloco de validação ---
     verif_pq = potencia_total_kw + perda_kw
@@ -1652,16 +1604,6 @@ def simular_cenario(
         # --- Eficiências ---
         "Eficiencia_Nominal_%":           eficiencia_nominal,
         "Eficiencia_Fluxo_Efetivo_%":     eficiencia_fluxo,
-        # --- Indicadores Normalizados ---
-        "Comprimento_Total_km":           comprimento_total_km,
-        "Distancia_Maxima_km":            distancia_max_km,
-        "Perdas_Fonte_%":                 perdas_fonte_pct,
-        "Perdas_Carga_%":                 perdas_carga_pct,
-        "Corrente_por_MVA":               corrente_por_mva,
-        "Potencia_kVA_por_km":            potencia_kva_por_km,
-        "Trafos_por_km":                  trafos_por_km,
-        "Queda_Tensao_pu":                queda_tensao_pu,
-        "Queda_Tensao_por_km":            queda_tensao_por_km,
         # --- Parâmetros de modelo de carga ---
         "Carga_Model":                    CARGA_MODEL,
         "Carga_Vminpu":                   CARGA_VMIN,
@@ -1671,13 +1613,9 @@ def simular_cenario(
         "Carga_kV":                       TENSAO_BT_KV,
         "Carga_FP":                       fp,
         # --- Qualidade ---
-        "Total_Barras":                   len(tensoes) if not tensoes.empty else np.nan,
         "Barras_Abaixo_0_97":             int((tensoes["Tensao_pu"] < 0.97).sum()),
         "Barras_Abaixo_0_93":             int((tensoes["Tensao_pu"] < 0.93).sum()),
         "Barras_Abaixo_0_90":             int((tensoes["Tensao_pu"] < 0.90).sum()),
-        "Percentual_Abaixo_0_97":         100.0 * (tensoes["Tensao_pu"] < 0.97).sum() / len(tensoes) if not tensoes.empty else np.nan,
-        "Percentual_Abaixo_0_93":         100.0 * (tensoes["Tensao_pu"] < 0.93).sum() / len(tensoes) if not tensoes.empty else np.nan,
-        "Percentual_Abaixo_0_90":         100.0 * (tensoes["Tensao_pu"] < 0.90).sum() / len(tensoes) if not tensoes.empty else np.nan,
         "Linhas_Impedancia_Real_BDGD":    imp_real,
         "Linhas_Impedancia_Estimada":     imp_estimada,
     }
@@ -1690,7 +1628,7 @@ def simular_cenario(
 # =============================================================================
 
 
-def processar_alimentador(alim_id, alim_config, ssdmt_orig, untrmt, unsemt):
+def processar_alimentador(alim_id, ssdmt_orig, untrmt, unsemt):
     """
     Executa todas as etapas para um alimentador:
       1. Comprimento pela geometria
@@ -1701,11 +1639,8 @@ def processar_alimentador(alim_id, alim_config, ssdmt_orig, untrmt, unsemt):
       6. Simulações (se SIMULAR=True)
       7. Exportação de planilhas e gráficos
     """
-    pasta_saida_alim = os.path.join(PASTA_SAIDA, "resultados", clean_id(alim_id))
-    os.makedirs(pasta_saida_alim, exist_ok=True)
-
     print(f"\n{'=' * 60}")
-    print(f"ALIMENTADOR: {alim_id} ({alim_config['perfil']})")
+    print(f"ALIMENTADOR: {alim_id}")
     print(f"{'=' * 60}")
 
     # ------------------------------------------------------------------
@@ -1743,7 +1678,7 @@ def processar_alimentador(alim_id, alim_config, ssdmt_orig, untrmt, unsemt):
     # Transformador-alvo
     # ------------------------------------------------------------------
     trafo_alvo = selecionar_transformador_alvo(
-        untrmt, barras_energizadas, alim_config.get("transformador_alvo")
+        untrmt, barras_energizadas, TRANSFORMADOR_ALVO_MANUAL
     )
 
     if trafo_alvo is not None:
@@ -1818,9 +1753,6 @@ def processar_alimentador(alim_id, alim_config, ssdmt_orig, untrmt, unsemt):
                     trafo_alvo=trafo_alvo,
                     elementos=elementos,
                     distancias=topo["distancias"],
-                    pasta_saida_alim=pasta_saida_alim,
-                    distancia_max_km=topo["distancia_ponta_km"],
-                    comprimento_total_km=topo["comprimento_total_km"],
                 )
                 resultado.update({
                     "PAC_Inicial":       pac_inicial,
@@ -1857,7 +1789,6 @@ def processar_alimentador(alim_id, alim_config, ssdmt_orig, untrmt, unsemt):
     # ------------------------------------------------------------------
     exportar_planilha(
         alim_id=alim_id,
-        pasta_saida_alim=pasta_saida_alim,
         df_resumo=df_resumo,
         df_diag_topo=df_diag_topo,
         df_diag_comp=df_diag_comp,
@@ -1871,10 +1802,10 @@ def processar_alimentador(alim_id, alim_config, ssdmt_orig, untrmt, unsemt):
     # Gráficos
     # ------------------------------------------------------------------
     if SIMULAR and not df_resumo.empty:
-        gerar_graficos(alim_id, pasta_saida_alim, df_resumo, detalhes)
+        gerar_graficos(alim_id, df_resumo, detalhes)
 
     # Mapa (sempre, se geometria disponível)
-    gerar_mapa(alim_id, pasta_saida_alim, ssdmt_geo, topo, trafo_alvo, pac_inicial, metodo_origem)
+    gerar_mapa(alim_id, ssdmt_geo, topo, trafo_alvo, pac_inicial, metodo_origem)
 
     return df_resumo
 
@@ -1886,7 +1817,6 @@ def processar_alimentador(alim_id, alim_config, ssdmt_orig, untrmt, unsemt):
 
 def exportar_planilha(
     alim_id,
-    pasta_saida_alim,
     df_resumo,
     df_diag_topo,
     df_diag_comp,
@@ -1897,10 +1827,10 @@ def exportar_planilha(
 ):
     """
     [A13] Exporta planilha Excel com abas padronizadas.
-    Nome: analise_eletrica_{alim_id}.xlsx
+    Nome: analise_eletrica_{alim_id}_validada.xlsx
     """
     arquivo = os.path.join(
-        pasta_saida_alim, f"analise_eletrica_{alim_id}.xlsx"
+        PASTA_SAIDA, f"analise_eletrica_{alim_id}_validada.xlsx"
     )
 
     # Avisa se o arquivo já existe
@@ -1910,7 +1840,7 @@ def exportar_planilha(
     params_modelagem = pd.DataFrame({
         "Parametro": [
             "GDB_PATH",
-            "ALIMENTADORES_ATIVOS",
+            "ALIMENTADORES",
             "TENSAO_MT_KV",
             "TENSAO_BT_KV",
             "CRS_METRICO",
@@ -1929,12 +1859,12 @@ def exportar_planilha(
         ],
         "Valor": [
             GDB_PATH,
-            str(ALIMENTADORES_ATIVOS),
+            str(ALIMENTADORES),
             TENSAO_MT_KV,
             TENSAO_BT_KV,
             CRS_METRICO,
             str(PAC_INICIAL_MANUAL),
-            str(ALIMENTADORES_ESTUDO.get(alim_id, {}).get("transformador_alvo", "N/A")),
+            TRANSFORMADOR_ALVO_MANUAL,
             TIPO_SIMULACAO,
             FP_BASE,
             FP_BAIXO,
@@ -2053,14 +1983,14 @@ def salvar_figura(fig, pasta, nome_arquivo):
     print(f"  Gráfico salvo: {caminho}")
 
 
-def gerar_graficos(alim_id, pasta_saida_alim, resumo, detalhes):
+def gerar_graficos(alim_id, resumo, detalhes):
     """
     [A14] Gera e salva todos os gráficos por cenário e por distância.
     """
     if resumo.empty:
         return
 
-    pasta_graf = os.path.join(pasta_saida_alim, "graficos")
+    pasta_graf = os.path.join(PASTA_SAIDA, f"graficos_{alim_id}")
     os.makedirs(pasta_graf, exist_ok=True)
 
     # 1. Tensão mínima por cenário
@@ -2212,7 +2142,7 @@ def gerar_graficos(alim_id, pasta_saida_alim, resumo, detalhes):
 # =============================================================================
 
 
-def gerar_mapa(alim_id, pasta_saida_alim, ssdmt_geo, topo, trafo_alvo, pac_inicial, metodo_origem):
+def gerar_mapa(alim_id, ssdmt_geo, topo, trafo_alvo, pac_inicial, metodo_origem):
     """
     [A15] Gera mapa do alimentador.
 
@@ -2225,7 +2155,7 @@ def gerar_mapa(alim_id, pasta_saida_alim, ssdmt_geo, topo, trafo_alvo, pac_inici
             print("  Mapa ignorado: sem geometria disponível.")
             return
 
-        pasta_graf = os.path.join(pasta_saida_alim, "graficos")
+        pasta_graf = os.path.join(PASTA_SAIDA, f"graficos_{alim_id}")
         os.makedirs(pasta_graf, exist_ok=True)
 
         fig, ax = plt.subplots(figsize=(14, 12))
@@ -2296,146 +2226,6 @@ def gerar_mapa(alim_id, pasta_saida_alim, ssdmt_geo, topo, trafo_alvo, pac_inici
 
 
 # =============================================================================
-# MÓDULO COMPARATIVO (Industrial x Residencial)
-# =============================================================================
-
-
-def gerar_relatorio_texto(pasta_comp, nw08_100, res_100, nw08_160, res_160):
-    texto = [
-        "============================================================================",
-        "ANÁLISE COMPARATIVA AUTOMÁTICA: PERFIL INDUSTRIAL vs. RESIDENCIAL",
-        "============================================================================",
-        f"\nOs resultados do modelo indicam as seguintes respostas do alimentador NW08 (Industrial) e do "
-        f"Alimentador Residencial sob as mesmas condições metodológicas de análise de fluxo de carga.",
-        "\n1. QUEDA DE TENSÃO E BARRAS CRÍTICAS",
-    ]
-    if nw08_100 is not None and res_100 is not None:
-        texto.append(
-            f"No cenário nominal (100%), o NW08 apresentou queda total de {nw08_100['Queda_Tensao_pu']:.4f} p.u. "
-            f"({nw08_100['Queda_Tensao_por_km']:.4f} p.u./km), com {nw08_100['Percentual_Abaixo_0_93']:.1f}% das barras em atenção."
-        )
-        texto.append(
-            f"O alimentador residencial apresentou queda de {res_100['Queda_Tensao_pu']:.4f} p.u. "
-            f"({res_100['Queda_Tensao_por_km']:.4f} p.u./km), com {res_100['Percentual_Abaixo_0_93']:.1f}% das barras em atenção."
-        )
-    
-    texto.append("\n2. SENSIBILIDADE AO CRESCIMENTO DE CARGA (100% -> 160%)")
-    if nw08_100 is not None and nw08_160 is not None and res_100 is not None and res_160 is not None:
-        sens_nw08 = nw08_100['Tensao_Minima_pu'] - nw08_160['Tensao_Minima_pu']
-        sens_res  = res_100['Tensao_Minima_pu'] - res_160['Tensao_Minima_pu']
-        texto.append(
-            f"A tensão mínima do NW08 caiu {sens_nw08:.4f} p.u. no estresse térmico, enquanto o residencial "
-            f"caiu {sens_res:.4f} p.u."
-        )
-        maior_sens = "Residencial" if sens_res > sens_nw08 else "Industrial"
-        texto.append(f"O alimentador {maior_sens} demonstrou maior sensibilidade de tensão ao aumento global da carga.")
-        
-        cresc_perda_nw08 = (nw08_160['Perda_Ativa_estimada_kW'] - nw08_100['Perda_Ativa_estimada_kW']) / nw08_100['Perda_Ativa_estimada_kW'] * 100
-        cresc_perda_res  = (res_160['Perda_Ativa_estimada_kW'] - res_100['Perda_Ativa_estimada_kW']) / res_100['Perda_Ativa_estimada_kW'] * 100
-        texto.append(
-            f"\nEm termos de perdas, o NW08 teve crescimento relativo de {cresc_perda_nw08:.1f}%, e o residencial {cresc_perda_res:.1f}%."
-        )
-
-    texto.append("\nCONCLUSÃO")
-    texto.append("Nas condições e hipóteses adotadas (impedâncias estimadas, ausência de demanda calibrada exata), ")
-    texto.append("os indicadores normalizados permitem avaliar as discrepâncias de comportamento elétrico entre os dois perfis territoriais.")
-    texto.append("Os valores absolutos devem ser interpretados considerando as limitações do modelo expostas na planilha.")
-
-    arq_txt = os.path.join(pasta_comp, "analise_comparativa_industrial_residencial.txt")
-    with open(arq_txt, "w", encoding="utf-8") as f:
-        f.write("\n".join(texto))
-    print(f"  Laudo analítico gerado: {arq_txt}")
-
-
-def comparar_alimentadores(resumos_dict):
-    """
-    Gera as análises integradas dos alimentadores ativos.
-    """
-    if len(resumos_dict) < 2:
-        print("\n[Comparação] Necessário pelo menos 2 alimentadores simulados para gerar comparação.")
-        return
-
-    pasta_comp = os.path.join(PASTA_SAIDA, "resultados", "comparacao")
-    os.makedirs(pasta_comp, exist_ok=True)
-    
-    pasta_graf_comp = os.path.join(pasta_comp, "graficos_comparativos")
-    os.makedirs(pasta_graf_comp, exist_ok=True)
-
-    dfs_validos = []
-    for alim_id, df_res in resumos_dict.items():
-        if not df_res.empty:
-            df = df_res.copy()
-            df.insert(0, "Perfil", ALIMENTADORES_ESTUDO[alim_id]["perfil"])
-            df.insert(1, "Regiao", ALIMENTADORES_ESTUDO[alim_id]["regiao"])
-            dfs_validos.append(df)
-            
-    if not dfs_validos:
-        return
-        
-    consolidado = pd.concat(dfs_validos, ignore_index=True)
-    
-    # Exportação da Planilha Comparativa
-    arq_comp = os.path.join(pasta_comp, "comparacao_industrial_residencial.xlsx")
-    with pd.ExcelWriter(arq_comp) as writer:
-        consolidado.to_excel(writer, sheet_name="Resultados_Cenarios", index=False)
-        
-        # Abas solicitadas vazias estruturais por enquanto
-        pd.DataFrame([{"Aviso": "Construído a partir dos resultados"}]).to_excel(writer, sheet_name="Caracterizacao", index=False)
-        pd.DataFrame([{"Aviso": "Ver colunas de Indicadores no final da Resultados_Cenarios"}]).to_excel(writer, sheet_name="Indicadores_Normalizados", index=False)
-        pd.DataFrame([
-            {"Metodologia": "Mesma versão de código"},
-            {"Metodologia": "Mesmos cenários (60% a 160% + alvo)"},
-            {"Metodologia": "Mesmo modelo de carga (ZIP 1)"},
-        ]).to_excel(writer, sheet_name="Metodologia", index=False)
-        pd.DataFrame([
-            {"Limitacoes": "Impedâncias estimadas para falta de R1/X1"},
-            {"Limitacoes": "Ausência de demanda real calibrada"},
-            {"Limitacoes": "Classificação industrial/residencial baseada em topologia territorial indireta"},
-        ]).to_excel(writer, sheet_name="Limitacoes", index=False)
-
-    # Gráfico 1: Tensão Mínima
-    fig, ax = plt.subplots(figsize=(12, 6))
-    for alim_id in resumos_dict.keys():
-        df_plot = consolidado[(consolidado["Alimentador"] == alim_id) & (~consolidado["Cenario"].str.contains("Trafo"))]
-        if not df_plot.empty:
-            ax.plot(df_plot["Cenario"], df_plot["Tensao_Minima_pu"], marker="o", label=f"{alim_id} ({ALIMENTADORES_ESTUDO[alim_id]['perfil']})")
-    for lim, cor, label in [(0.97, "orange", "0,97 p.u."), (0.93, "red", "0,93 p.u."), (0.90, "darkred", "0,90 p.u.")]:
-        ax.axhline(lim, linestyle="--", color=cor, label=label)
-    ax.set_title("Tensão Mínima por Cenário Comparada")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    salvar_figura(fig, pasta_graf_comp, "comp_tensao_minima.png")
-    plt.close(fig)
-
-    # Gráfico 2: Perdas Relativas à Fonte
-    fig, ax = plt.subplots(figsize=(12, 6))
-    for alim_id in resumos_dict.keys():
-        df_plot = consolidado[(consolidado["Alimentador"] == alim_id) & (~consolidado["Cenario"].str.contains("Trafo"))]
-        if not df_plot.empty:
-            ax.plot(df_plot["Cenario"], df_plot["Perdas_Fonte_%"], marker="o", label=f"{alim_id}")
-    ax.set_title("Perdas Relativas (%) à Fonte Comparada")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    salvar_figura(fig, pasta_graf_comp, "comp_perdas_relativas.png")
-    plt.close(fig)
-
-    # Texto analítico
-    nw08_100 = consolidado[(consolidado["Alimentador"] == "NW08") & (consolidado["Cenario"] == "Rede 100%")].to_dict('records')
-    res_100  = consolidado[(consolidado["Alimentador"] != "NW08") & (consolidado["Cenario"] == "Rede 100%")].to_dict('records')
-    nw08_160 = consolidado[(consolidado["Alimentador"] == "NW08") & (consolidado["Cenario"] == "Rede 160%")].to_dict('records')
-    res_160  = consolidado[(consolidado["Alimentador"] != "NW08") & (consolidado["Cenario"] == "Rede 160%")].to_dict('records')
-    
-    gerar_relatorio_texto(
-        pasta_comp,
-        nw08_100[0] if nw08_100 else None,
-        res_100[0] if res_100 else None,
-        nw08_160[0] if nw08_160 else None,
-        res_160[0] if res_160 else None,
-    )
-    print(f"\n[Sucesso] Resultados comparativos consolidados em: {pasta_comp}")
-
-
-# =============================================================================
 # PROGRAMA PRINCIPAL
 # =============================================================================
 
@@ -2443,32 +2233,9 @@ def comparar_alimentadores(resumos_dict):
 def main():
     os.makedirs(PASTA_SAIDA, exist_ok=True)
 
-    print("\n=== CONFIGURAÇÕES ATIVAS ===")
-    for chave in ALIMENTADORES_ATIVOS:
-        cfg = ALIMENTADORES_ESTUDO.get(chave)
-        print(
-            f"Chave={chave} | "
-            f"código={cfg.get('codigo') if cfg else None} | "
-            f"perfil={cfg.get('perfil') if cfg else None} | "
-            f"região={cfg.get('regiao') if cfg else None} | "
-            f"trafo={cfg.get('transformador_alvo') if cfg else None}"
-        )
+    filtro = " OR ".join([f"CTMT = '{a}'" for a in ALIMENTADORES])
 
-    codigos_ativos = []
-    for chave in ALIMENTADORES_ATIVOS:
-        cfg = ALIMENTADORES_ESTUDO.get(chave)
-        if cfg and cfg.get("codigo"):
-            codigos_ativos.append(cfg["codigo"])
-
-    print("\nCódigos efetivamente carregados:", codigos_ativos)
-
-    if not codigos_ativos:
-        print("Nenhum alimentador com código válido para simulação.")
-        return
-
-    filtro = " OR ".join([f"CTMT = '{a}'" for a in set(codigos_ativos)])
-
-    print("\nCarregando dados da GDB...")
+    print("Carregando dados da GDB...")
     ssdmt_total  = gpd.read_file(GDB_PATH, layer="SSDMT",  where=filtro)
     untrmt_total = gpd.read_file(GDB_PATH, layer="UNTRMT", where=filtro)
     unsemt_total = gpd.read_file(GDB_PATH, layer="UNSEMT", where=filtro)
@@ -2477,55 +2244,57 @@ def main():
     print(f"Trechos MT  (SSDMT):  {len(ssdmt_total)}")
     print(f"Transformadores:      {len(untrmt_total)}")
     print(f"Chaves (UNSEMT):      {len(unsemt_total)}")
-    
-    print("\nCTMT disponíveis em SSDMT:")
-    ctmt_unicos = set(ssdmt_total["CTMT"].dropna().astype(str).unique())
-    for alim in codigos_ativos:
-        print(f"{alim} em SSDMT: {str(alim) in ctmt_unicos}")
+    print(f"Alimentadores CTMT:   {ssdmt_total['CTMT'].value_counts().to_dict()}")
 
-    resumos = {}
+    # Diagnóstico de colunas relevantes da SSDMT
+    print("\n--- Colunas SSDMT disponíveis ---")
+    print(list(ssdmt_total.columns))
 
-    for indice, chave_config in enumerate(ALIMENTADORES_ATIVOS, start=1):
-        print(f"\n>>> INICIANDO ALIMENTADOR {indice}/{len(ALIMENTADORES_ATIVOS)}: {chave_config}")
-        
-        config = ALIMENTADORES_ESTUDO.get(chave_config)
-        if config is None:
-            print(f"ERRO: configuração '{chave_config}' não encontrada.")
-            continue
-            
-        alim_id = config.get("codigo")
-        if not alim_id:
-            print(f"ERRO: código não definido para '{chave_config}'.")
-            continue
+    print("\n--- Valores de DIST (primeiros 5) ---")
+    if "DIST" in ssdmt_total.columns:
+        print(ssdmt_total["DIST"].value_counts(dropna=False).head(5).to_string())
+        print(
+            "  AVISO: DIST não é usada como critério de origem (valor constante)."
+        )
+    else:
+        print("  Coluna DIST não presente.")
 
-        print(f">>> Código real do alimentador: {alim_id}")
+    print("\n--- UNI_TR_AT (primeiros 5) ---")
+    if "UNI_TR_AT" in ssdmt_total.columns:
+        print(ssdmt_total["UNI_TR_AT"].value_counts(dropna=False).head(5).to_string())
+    else:
+        print("  Coluna UNI_TR_AT não presente.")
 
-        ssdmt_alim = ssdmt_total[ssdmt_total["CTMT"].astype(str) == str(alim_id)].copy()
-        untrmt_alim = untrmt_total[untrmt_total["CTMT"].astype(str) == str(alim_id)].copy()
-        unsemt_alim = unsemt_total[unsemt_total["CTMT"].astype(str) == str(alim_id)].copy()
+    print("\n--- PN_CON_1, PN_CON_2 (amostra) ---")
+    cols_diag = [c for c in ["COD_ID", "PAC_1", "PAC_2", "UNI_TR_AT",
+                              "SUB", "PN_CON_1", "PN_CON_2", "CTMT"]
+                 if c in ssdmt_total.columns]
+    print(ssdmt_total[cols_diag].head(10).to_string())
+    print("========================")
 
-        print(f">>> Dados filtrados de {alim_id}: {len(ssdmt_alim)} trechos, {len(untrmt_alim)} transformadores, {len(unsemt_alim)} chaves.")
+    resumos = []
 
-        if ssdmt_alim.empty:
-            print(f"ERRO: nenhum trecho encontrado para o alimentador {alim_id}.")
-            continue
+    for alim_id in ALIMENTADORES:
+        ssdmt  = ssdmt_total[ssdmt_total["CTMT"] == alim_id].copy()
+        untrmt = untrmt_total[untrmt_total["CTMT"] == alim_id].copy()
+        unsemt = unsemt_total[unsemt_total["CTMT"] == alim_id].copy()
 
-        try:
-            df_resumo = processar_alimentador(alim_id, config, ssdmt_alim, untrmt_alim, unsemt_alim)
-            resumos[alim_id] = df_resumo
-            print(f"\n>>> ALIMENTADOR {alim_id} CONCLUÍDO COM SUCESSO.")
-        except Exception as erro:
-            print(f"\nERRO AO PROCESSAR {alim_id}: {type(erro).__name__}: {erro}")
-            import traceback
-            traceback.print_exc()
+        if ssdmt.empty:
+            print(f"\n{alim_id} ignorado: sem trechos SSDMT.")
             continue
 
-    if SIMULAR:
-        resultados_validos = {k: v for k, v in resumos.items() if v is not None}
-        if len(resultados_validos) >= 2:
-            comparar_alimentadores(resultados_validos)
-        else:
-            print("\nComparação não gerada: menos de dois alimentadores foram processados com sucesso.")
+        df_resumo = processar_alimentador(alim_id, ssdmt, untrmt, unsemt)
+        resumos.append(df_resumo)
+
+    if resumos:
+        dfs_validos = [d for d in resumos if not d.empty]
+        if dfs_validos:
+            consolidado = pd.concat(dfs_validos, ignore_index=True)
+            caminho_cons = os.path.join(
+                PASTA_SAIDA, "resumo_consolidado_alimentadores.xlsx"
+            )
+            consolidado.to_excel(caminho_cons, index=False)
+            print(f"\nResumo consolidado exportado para:\n{caminho_cons}")
 
     print("\nProcessamento concluído.")
     if not SIMULAR:

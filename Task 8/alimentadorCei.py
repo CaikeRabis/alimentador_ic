@@ -8,7 +8,7 @@ import pandas as pd
 
 GDB_PATH = r"C:\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
 
-PASTA_SAIDA = r"C:\Users\caike\PycharmProjects\bdgdbrasilia"
+PASTA_SAIDA = r"C:\Users\adm\Documents\Analise-Alimentador\alimentador_ic"
 
 # Pode trocar futuramente por TAGUATINGA, SAMAMBAIA, GAMA etc.
 REGIAO_ADMINISTRATIVA = "CEILÂNDIA"

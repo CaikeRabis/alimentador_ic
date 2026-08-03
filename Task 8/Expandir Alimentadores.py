@@ -17,7 +17,7 @@ alimentadores = [
      'NW11'
 ]
 
-csv_folder = r"C:\Users\caike\PycharmProjects\bdgdbrasilia"
+csv_folder = r"C:\Users\adm\Documents\Analise-Alimentador\alimentador_ic"
 horario_pico = 19
 
 # 0.60 = condição inicial de 60% da potência nominal dos transformadores
