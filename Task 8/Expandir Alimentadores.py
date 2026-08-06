@@ -14,10 +14,10 @@ import numpy as np
 gdb_path = r"C:\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
 
 alimentadores = [
-     'NW11'
+     'CN15'
 ]
 
-csv_folder = r"C:\Users\adm\Documents\Analise-Alimentador\alimentador_ic"
+csv_folder = r"c:\Users\caike\PycharmProjects\bdgdbrasilia\resultados"
 horario_pico = 19
 
 # 0.60 = condição inicial de 60% da potência nominal dos transformadores
@@ -90,52 +90,56 @@ def obter_numero_linha(row, candidatos):
 
     return None
 
+IMPEDANCIAS_TIPICAS = {
+    # Alumínio Nu (CA / CAA)
+    "3": (0.686, 0.400),  # CAA 4/0 AWG
+    "4": (0.435, 0.380),  # CAA 336.4 MCM
+    "5": (1.090, 0.420),  # CAA 2/0 AWG
+    "12": (1.350, 0.430), # CA 1/0 AWG
+    "14": (2.150, 0.450), # CA 2 AWG
+    "16": (3.420, 0.460), # CA 4 AWG
+    
+    # Cobre Nu
+    "36": (0.865, 0.410), # Cu 2/0 AWG
+    "40": (1.370, 0.420), # Cu 2 AWG
+    "41": (2.180, 0.430), # Cu 4 AWG
+    "42": (3.470, 0.440), # Cu 6 AWG
+    
+    # Multiplexado/Isolado
+    "73": (0.342, 0.120), # Al 185 mm2
+    "75": (0.528, 0.125), # Al 120 mm2
+    "77": (0.868, 0.130), # Al 70 mm2
+    "78": (1.200, 0.135), # Al 50 mm2
+}
 
 def obter_impedancia_linha(row, length_km):
     """
     Tenta usar impedâncias reais, caso existam na camada SSDMT.
-    Se não existirem, usa aproximação conservadora por comprimento.
-
-    IMPORTANTE:
-    A BDGD pode variar nomes de campos dependendo da distribuidora/versão.
-    Por isso, esta função procura vários nomes possíveis.
+    Se não existirem, usa a tabela de impedâncias típicas com base no TIP_CND da BDGD.
     """
-
-    candidatos_r1 = [
-        "R1", "R1_OHM_KM", "R1_OHMKM", "R1_OHM_POR_KM",
-        "RESISTENCIA", "RESIST", "R_OHM_KM", "R_OHMKM"
-    ]
-
-    candidatos_x1 = [
-        "X1", "X1_OHM_KM", "X1_OHMKM", "X1_OHM_POR_KM",
-        "REATANCIA", "REAT", "X_OHM_KM", "X_OHMKM"
-    ]
-
+    candidatos_r1 = ["R1", "R1_OHM_KM", "R1_OHMKM", "R1_OHM_POR_KM", "RESISTENCIA", "RESIST", "R_OHM_KM", "R_OHMKM"]
+    candidatos_x1 = ["X1", "X1_OHM_KM", "X1_OHMKM", "X1_OHM_POR_KM", "REATANCIA", "REAT", "X_OHM_KM", "X_OHMKM"]
+    
     r1_real = obter_numero_linha(row, candidatos_r1)
     x1_real = obter_numero_linha(row, candidatos_x1)
-
+    
     if r1_real is not None and x1_real is not None:
         return r1_real, x1_real, "real_bdgd"
 
-    # Fallback: valores típicos/conservadores por comprimento
-    if usar_impedancia_conservadora_quando_sem_dado:
-        if length_km < 0.1:
-            r1, x1 = 1.20, 0.70
-        elif length_km < 0.5:
-            r1, x1 = 0.95, 0.55
-        else:
-            r1, x1 = 0.75, 0.45
-        return r1, x1, "estimada_conservadora"
-
-    # Fallback mais leve, parecido com sua versão anterior
+    # Tentativa 2: Busca por TIP_CND
+    tip_cnd = str(row.get("TIP_CND", "")).strip()
+    if tip_cnd in IMPEDANCIAS_TIPICAS:
+        r1, x1 = IMPEDANCIAS_TIPICAS[tip_cnd]
+        return r1, x1, f"tipica_tabela_{tip_cnd}"
+        
+    # Tentativa 3: Fallback realista para redes urbanas (evita 1.2 ohm/km que destrói perfil de tensão)
     if length_km < 0.1:
         r1, x1 = 0.70, 0.40
     elif length_km < 0.5:
         r1, x1 = 0.50, 0.35
     else:
         r1, x1 = 0.30, 0.30
-
-    return r1, x1, "estimada_simples"
+    return r1, x1, "estimada_realista"
 
 
 def encontrar_ponta_eletrica(ssdmt, pac_ini):
@@ -545,7 +549,7 @@ plt.xticks(rotation=30, ha="right")
 plt.grid(True, alpha=0.3)
 plt.legend(ncol=3)
 plt.tight_layout()
-plt.show()
+# plt.show()
 
 
 # --- GRÁFICO 2: CORRENTE MÁXIMA POR CENÁRIO ---
@@ -569,7 +573,7 @@ plt.xticks(rotation=30, ha="right")
 plt.grid(True, alpha=0.3)
 plt.legend(ncol=3)
 plt.tight_layout()
-plt.show()
+# plt.show()
 
 
 # --- GRÁFICO 3: PERDAS TÉCNICAS POR CENÁRIO ---
@@ -593,7 +597,7 @@ plt.xticks(rotation=30, ha="right")
 plt.grid(True, alpha=0.3)
 plt.legend(ncol=3)
 plt.tight_layout()
-plt.show()
+# plt.show()
 
 
 # --- GRÁFICOS DETALHADOS POR ALIMENTADOR ---
@@ -647,7 +651,7 @@ for alim_id, resultados in resultados_detalhados.items():
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.show()
+    # plt.show()
 
 
 # --- RANKING DE FRAGILIDADE ---
@@ -724,7 +728,7 @@ plt.legend(
     loc="upper left"
 )
 
-plt.show()
+# plt.show()
 
 
 # --- MAPA COM TODOS OS ALIMENTADORES ---
@@ -769,6 +773,6 @@ plt.legend(
     loc="upper left"
 )
 
-plt.show()
+# plt.show()
 
 print("\nAnálise ampliada melhorada concluída com sucesso!")

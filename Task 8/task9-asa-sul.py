@@ -28,7 +28,7 @@ import py_dss_interface
 # =============================================================================
 
 GDB_PATH = r"C:\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
-PASTA_SAIDA = r"C:\Users\adm\Documents\Analise-Alimentador\alimentador_ic"
+PASTA_SAIDA = r"c:/Users/caike/PycharmProjects/bdgdbrasilia"
 
 ALIMENTADORES = [
     "ES11"
