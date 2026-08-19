@@ -1,0 +1,57 @@
+========================================================================
+RELATORIO COMPARATIVO - ALIMENTADORES RESIDENCIAIS DE CEILANDIA
+CN15 vs. CN12
+Gerado por task9-ceilandia-comparativo.py
+========================================================================
+
+1. ALIMENTADOR SELECIONADO
+----------------------------------------
+  Codigo:              CN12
+  Trechos MT:          992
+  Transformadores:     158
+  Potencia instalada:  9988 kVA
+  Comprimento total:   36.31 km
+  Distancia eletrica:  13.90 km
+
+2. IMPEDANCIAS
+----------------------------------------
+  R1: min=0.3000 | medio=0.4416 | mediano=0.5000 | max=0.7000
+  X1: min=0.3300 | medio=0.3471 | mediano=0.3500 | max=0.4000
+  Trechos real BDGD:   0
+  Trechos estimados:   0
+  Fallback R1=1,20:    0
+
+3. RESULTADOS DOS CENARIOS
+----------------------------------------
+  Cenario       CN15 Vmin  Novo Vmin    Delta  CN15 Vmean  Novo Vmean
+  -----------------------------------------------------------------
+  Base 60%         0.8453     0.8888  +0.0435      0.8639      0.9065
+  Rede 80%         0.8047     0.8577  +0.0530      0.8280      0.8802
+  Rede 100%        0.7684     0.8290  +0.0606      0.7959      0.8560
+  Rede 120%        0.7356     0.8024  +0.0668      0.7669      0.8336
+  Rede 160%        0.6790     0.7550  +0.0760      0.7167      0.7935
+
+4. LIMITES DE CARREGAMENTO DO MODELO
+----------------------------------------
+  CN15:    Vmin < 0.93 p.u. ja no cenario de 60% (limite < 60%)
+  CN12: aprox. 36%
+
+5. QUESTAO CENTRAL DA PESQUISA
+----------------------------------------
+  Classificacao da evidencia: MODERADA
+
+  Ambos apresentam Vmin_MT < 0.93 p.u. a 60%, mas com desvio medio de 0.0600 p.u. Evidencia MODERADA de padrao regional.
+
+6. LIMITACOES DA ANALISE
+----------------------------------------
+  - Modelo de carga simplificado (model=1, potencia constante)
+  - Impedancias de transformadores estimadas (%R=1.2, XHL=4.5)
+  - Cenarios de carregamento globais (sem demanda real calibrada)
+  - Origem do alimentador por metodo topologico (provisorio)
+  - Carga uniformemente distribuida entre todos os transformadores
+  - Resultados sao condicoes simuladas sob as hipoteses adotadas
+  - Nao afirmar automaticamente violacao PRODIST
+
+========================================================================
+FIM DO RELATORIO
+========================================================================
