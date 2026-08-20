@@ -11,13 +11,13 @@ Gerado por task9-ceilandia-comparativo.py
   Transformadores:     158
   Potencia instalada:  9988 kVA
   Comprimento total:   36.31 km
-  Distancia eletrica:  13.90 km
+  Distancia eletrica:  13.40 km
 
 2. IMPEDANCIAS
 ----------------------------------------
-  R1: min=0.3000 | medio=0.4416 | mediano=0.5000 | max=0.7000
-  X1: min=0.3300 | medio=0.3471 | mediano=0.3500 | max=0.4000
-  Trechos real BDGD:   0
+  R1: min=0.1140 | medio=0.4713 | mediano=0.3750 | max=1.5289
+  X1: min=0.0541 | medio=0.1872 | mediano=0.1140 | max=0.4638
+  Trechos real BDGD:   992
   Trechos estimados:   0
   Fallback R1=1,20:    0
 
@@ -25,22 +25,23 @@ Gerado por task9-ceilandia-comparativo.py
 ----------------------------------------
   Cenario       CN15 Vmin  Novo Vmin    Delta  CN15 Vmean  Novo Vmean
   -----------------------------------------------------------------
-  Base 60%         0.8453     0.8888  +0.0435      0.8639      0.9065
-  Rede 80%         0.8047     0.8577  +0.0530      0.8280      0.8802
-  Rede 100%        0.7684     0.8290  +0.0606      0.7959      0.8560
-  Rede 120%        0.7356     0.8024  +0.0668      0.7669      0.8336
-  Rede 160%        0.6790     0.7550  +0.0760      0.7167      0.7935
+  Rede 20%         0.9420     0.9749  +0.0329      0.9489      0.9805
+  Rede 40%         0.8907     0.9488  +0.0581      0.9038      0.9602
+  Base 60%         0.8453     0.9251  +0.0798      0.8639      0.9417
+  Rede 80%         0.8047     0.9027  +0.0980      0.8280      0.9241
+  Rede 100%        0.7684     0.8814  +0.1130      0.7959      0.9074
+  Rede 120%        0.7356     0.8612  +0.1256      0.7669      0.8915
 
 4. LIMITES DE CARREGAMENTO DO MODELO
 ----------------------------------------
   CN15:    Vmin < 0.93 p.u. ja no cenario de 60% (limite < 60%)
-  CN12: aprox. 36%
+  CN12: Nao cruzou na faixa 10-100%
 
 5. QUESTAO CENTRAL DA PESQUISA
 ----------------------------------------
   Classificacao da evidencia: MODERADA
 
-  Ambos apresentam Vmin_MT < 0.93 p.u. a 60%, mas com desvio medio de 0.0600 p.u. Evidencia MODERADA de padrao regional.
+  Ambos apresentam Vmin_MT < 0.93 p.u. a 60%, mas com desvio medio de 0.0846 p.u. Evidencia MODERADA de padrao regional.
 
 6. LIMITACOES DA ANALISE
 ----------------------------------------

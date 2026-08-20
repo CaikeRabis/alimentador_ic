@@ -28,7 +28,7 @@ import py_dss_interface
 # =============================================================================
 
 GDB_PATH = r"C:\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
-PASTA_SAIDA = r"c:/Users/caike/PycharmProjects/bdgdbrasilia"
+PASTA_SAIDA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CODIGO_ALIMENTADOR_RESIDENCIAL = "CN15"
 
@@ -95,11 +95,12 @@ FP_BAIXO = 0.85
 #    {"nome": "Rede 160%", "carregamento_rede": 1.60, "fp": 0.92},
 #]
 CENARIOS_REDE = [
+    {"nome": "Rede 20%", "carregamento_rede": 0.20, "fp": 0.92},
+    {"nome": "Rede 40%", "carregamento_rede": 0.40, "fp": 0.92},
     {"nome": "Base 60%", "carregamento_rede": 0.60, "fp": 0.92},
     {"nome": "Rede 80%", "carregamento_rede": 0.80, "fp": 0.92},
     {"nome": "Rede 100%", "carregamento_rede": 1.00, "fp": 0.92},
     {"nome": "Rede 120%", "carregamento_rede": 1.20, "fp": 0.92},
-    {"nome": "Rede 160%", "carregamento_rede": 1.60, "fp": 0.92},
 ]
 
 # Ensaio localizado no transformador-alvo (FP8401 – 300 kVA).
@@ -307,6 +308,66 @@ def diagnostico_comprimentos_df(ssdmt):
 # =============================================================================
 
 
+IMPEDANCIAS_SEGCON = {}
+
+
+def carregar_impedancias_segcon(gdb_path):
+    """Carrega R1/X1 oficiais por TIP_CND a partir da camada SEGCON."""
+    global IMPEDANCIAS_SEGCON
+
+    segcon = gpd.read_file(gdb_path, layer="SEGCON")
+    colunas = {str(col).upper(): col for col in segcon.columns}
+    obrigatorias = ["COD_ID", "R1", "X1"]
+    ausentes = [col for col in obrigatorias if col not in colunas]
+    if ausentes:
+        raise KeyError(f"SEGCON sem as colunas obrigatorias: {ausentes}")
+
+    mapa = {}
+    for _, row in segcon.iterrows():
+        codigo = str(row[colunas["COD_ID"]]).strip()
+        r1 = limpar_numero(row[colunas["R1"]])
+        x1 = limpar_numero(row[colunas["X1"]])
+        if codigo and pd.notna(r1) and pd.notna(x1) and r1 > 0 and x1 > 0:
+            mapa[codigo] = (r1, x1)
+
+    if not mapa:
+        raise ValueError("Nenhuma impedancia valida foi carregada da SEGCON.")
+
+    IMPEDANCIAS_SEGCON = mapa
+    print(f"Impedancias carregadas da SEGCON: {len(mapa)} tipos de condutor")
+
+
+def diagnosticar_cobertura_segcon(ssdmt):
+    """Confere a cobertura da SEGCON e resume os parametros aplicados."""
+    tipos = ssdmt["TIP_CND"].astype(str).str.strip()
+    cobertos = tipos.isin(IMPEDANCIAS_SEGCON)
+    faltantes = sorted(tipos[~cobertos].unique())
+
+    print("\n--- Diagnostico de impedancias SEGCON ---")
+    print(f"Trechos cobertos pela SEGCON: {int(cobertos.sum())}/{len(ssdmt)}")
+    if faltantes:
+        print(f"TIP_CND sem correspondencia: {faltantes}")
+
+    if cobertos.any():
+        comprimentos = ssdmt.loc[cobertos, "COMPRIMENTO_REAL_KM"].astype(float)
+        r1 = tipos.loc[cobertos].map(lambda codigo: IMPEDANCIAS_SEGCON[codigo][0])
+        x1 = tipos.loc[cobertos].map(lambda codigo: IMPEDANCIAS_SEGCON[codigo][1])
+        peso_total = comprimentos.sum()
+        print(
+            "R1 medio ponderado pelo comprimento: "
+            f"{(r1 * comprimentos).sum() / peso_total:.4f} ohm/km"
+        )
+        print(
+            "X1 medio ponderado pelo comprimento: "
+            f"{(x1 * comprimentos).sum() / peso_total:.4f} ohm/km"
+        )
+
+    if faltantes:
+        warnings.warn(
+            "Ha trechos sem R1/X1 na SEGCON; somente eles usarao fallback."
+        )
+
+
 IMPEDANCIAS_TIPICAS = {
     '94_A4_3_1': (0.2920, 0.3510, 'ACSR 4/0 AWG'),
     '68_A4_3_1': (0.5260, 0.3600, 'ACSR 2/0 AWG'),
@@ -339,6 +400,10 @@ def obter_impedancia_linha(row, length_km):
         
     # Tenta usar lookup por tipo de cabo se disponível na BDGD
     tip_cnd = str(row.get("TIP_CND", "")).strip()
+    if tip_cnd in IMPEDANCIAS_SEGCON:
+        r1_segcon, x1_segcon = IMPEDANCIAS_SEGCON[tip_cnd]
+        return r1_segcon, x1_segcon, "segcon_bdgd"
+
     if tip_cnd in IMPEDANCIAS_TIPICAS:
         r1_tipico, x1_tipico, _ = IMPEDANCIAS_TIPICAS[tip_cnd]
         return r1_tipico, x1_tipico, f"estimada_cabo_{tip_cnd}"
@@ -1310,7 +1375,7 @@ def simular_cenario(
         length = comprimento_km_linha(row)
         r1, x1, origem_imp = obter_impedancia_linha(row, length)
 
-        if origem_imp == "real_bdgd":
+        if origem_imp in {"real_bdgd", "segcon_bdgd"}:
             imp_real += 1
         else:
             imp_estimada += 1
@@ -1728,6 +1793,7 @@ def processar_alimentador(alim_id, alim_config, ssdmt_orig, untrmt, unsemt):
     # [A1] Comprimento pela geometria
     # ------------------------------------------------------------------
     ssdmt, ssdmt_geo = calcular_comprimentos_geometria(ssdmt_orig)
+    diagnosticar_cobertura_segcon(ssdmt)
 
     # ------------------------------------------------------------------
     # [A4] Diagnóstico das chaves
@@ -2123,8 +2189,8 @@ def gerar_graficos(alim_id, pasta_saida_alim, resumo, detalhes):
     # Cenários para perfis ao longo da distância
     cenarios_perfil = [
         c for c in [
-            "Base 60%", "Rede 100%", "Rede 160%",
-            "Rede 160% FP baixo", "Trafo alvo 100%", "Trafo alvo 150%",
+            "Rede 20%", "Rede 40%", "Base 60%", "Rede 80%",
+            "Rede 100%", "Rede 120%", "Trafo alvo 100%", "Trafo alvo 150%",
         ]
         if c in detalhes
     ]
@@ -2317,7 +2383,7 @@ def gerar_mapa(alim_id, pasta_saida_alim, ssdmt_geo, topo, trafo_alvo, pac_inici
 # =============================================================================
 
 
-def gerar_relatorio_texto(pasta_comp, nw08_100, res_100, nw08_160, res_160):
+def gerar_relatorio_texto(pasta_comp, nw08_100, res_100, nw08_120, res_120):
     texto = [
         "============================================================================",
         "ANÁLISE COMPARATIVA AUTOMÁTICA: PERFIL INDUSTRIAL vs. RESIDENCIAL",
@@ -2336,10 +2402,10 @@ def gerar_relatorio_texto(pasta_comp, nw08_100, res_100, nw08_160, res_160):
             f"({res_100['Queda_Tensao_por_km']:.4f} p.u./km), com {res_100['Percentual_Abaixo_0_93']:.1f}% das barras em atenção."
         )
     
-    texto.append("\n2. SENSIBILIDADE AO CRESCIMENTO DE CARGA (100% -> 160%)")
-    if nw08_100 is not None and nw08_160 is not None and res_100 is not None and res_160 is not None:
-        sens_nw08 = nw08_100['Tensao_Minima_pu'] - nw08_160['Tensao_Minima_pu']
-        sens_res  = res_100['Tensao_Minima_pu'] - res_160['Tensao_Minima_pu']
+    texto.append("\n2. SENSIBILIDADE AO CRESCIMENTO DE CARGA (100% -> 120%)")
+    if nw08_100 is not None and nw08_120 is not None and res_100 is not None and res_120 is not None:
+        sens_nw08 = nw08_100['Tensao_Minima_pu'] - nw08_120['Tensao_Minima_pu']
+        sens_res  = res_100['Tensao_Minima_pu'] - res_120['Tensao_Minima_pu']
         texto.append(
             f"A tensão mínima do NW08 caiu {sens_nw08:.4f} p.u. no estresse térmico, enquanto o residencial "
             f"caiu {sens_res:.4f} p.u."
@@ -2347,8 +2413,8 @@ def gerar_relatorio_texto(pasta_comp, nw08_100, res_100, nw08_160, res_160):
         maior_sens = "Residencial" if sens_res > sens_nw08 else "Industrial"
         texto.append(f"O alimentador {maior_sens} demonstrou maior sensibilidade de tensão ao aumento global da carga.")
         
-        cresc_perda_nw08 = (nw08_160['Perda_Ativa_estimada_kW'] - nw08_100['Perda_Ativa_estimada_kW']) / nw08_100['Perda_Ativa_estimada_kW'] * 100
-        cresc_perda_res  = (res_160['Perda_Ativa_estimada_kW'] - res_100['Perda_Ativa_estimada_kW']) / res_100['Perda_Ativa_estimada_kW'] * 100
+        cresc_perda_nw08 = (nw08_120['Perda_Ativa_estimada_kW'] - nw08_100['Perda_Ativa_estimada_kW']) / nw08_100['Perda_Ativa_estimada_kW'] * 100
+        cresc_perda_res  = (res_120['Perda_Ativa_estimada_kW'] - res_100['Perda_Ativa_estimada_kW']) / res_100['Perda_Ativa_estimada_kW'] * 100
         texto.append(
             f"\nEm termos de perdas, o NW08 teve crescimento relativo de {cresc_perda_nw08:.1f}%, e o residencial {cresc_perda_res:.1f}%."
         )
@@ -2382,8 +2448,13 @@ def comparar_alimentadores(resumos_dict):
     for alim_id, df_res in resumos_dict.items():
         if not df_res.empty:
             df = df_res.copy()
-            df.insert(0, "Perfil", ALIMENTADORES_ESTUDO[alim_id]["perfil"])
-            df.insert(1, "Regiao", ALIMENTADORES_ESTUDO[alim_id]["regiao"])
+            config = next(
+                cfg
+                for cfg in ALIMENTADORES_ESTUDO.values()
+                if cfg.get("codigo") == alim_id
+            )
+            df.insert(0, "Perfil", config["perfil"])
+            df.insert(1, "Regiao", config["regiao"])
             dfs_validos.append(df)
             
     if not dfs_validos:
@@ -2401,7 +2472,7 @@ def comparar_alimentadores(resumos_dict):
         pd.DataFrame([{"Aviso": "Ver colunas de Indicadores no final da Resultados_Cenarios"}]).to_excel(writer, sheet_name="Indicadores_Normalizados", index=False)
         pd.DataFrame([
             {"Metodologia": "Mesma versão de código"},
-            {"Metodologia": "Mesmos cenários (60% a 160% + alvo)"},
+            {"Metodologia": "Mesmos cenários (20% a 120% + alvo)"},
             {"Metodologia": "Mesmo modelo de carga (ZIP 1)"},
         ]).to_excel(writer, sheet_name="Metodologia", index=False)
         pd.DataFrame([
@@ -2415,7 +2486,12 @@ def comparar_alimentadores(resumos_dict):
     for alim_id in resumos_dict.keys():
         df_plot = consolidado[(consolidado["Alimentador"] == alim_id) & (~consolidado["Cenario"].str.contains("Trafo"))]
         if not df_plot.empty:
-            ax.plot(df_plot["Cenario"], df_plot["Tensao_Minima_pu"], marker="o", label=f"{alim_id} ({ALIMENTADORES_ESTUDO[alim_id]['perfil']})")
+            config = next(
+                cfg
+                for cfg in ALIMENTADORES_ESTUDO.values()
+                if cfg.get("codigo") == alim_id
+            )
+            ax.plot(df_plot["Cenario"], df_plot["Tensao_Minima_pu"], marker="o", label=f"{alim_id} ({config['perfil']})")
     for lim, cor, label in [(0.97, "orange", "0,97 p.u."), (0.93, "red", "0,93 p.u."), (0.90, "darkred", "0,90 p.u.")]:
         ax.axhline(lim, linestyle="--", color=cor, label=label)
     ax.set_title("Tensão Mínima por Cenário Comparada")
@@ -2439,15 +2515,15 @@ def comparar_alimentadores(resumos_dict):
     # Texto analítico
     nw08_100 = consolidado[(consolidado["Alimentador"] == "NW08") & (consolidado["Cenario"] == "Rede 100%")].to_dict('records')
     res_100  = consolidado[(consolidado["Alimentador"] != "NW08") & (consolidado["Cenario"] == "Rede 100%")].to_dict('records')
-    nw08_160 = consolidado[(consolidado["Alimentador"] == "NW08") & (consolidado["Cenario"] == "Rede 160%")].to_dict('records')
-    res_160  = consolidado[(consolidado["Alimentador"] != "NW08") & (consolidado["Cenario"] == "Rede 160%")].to_dict('records')
+    nw08_120 = consolidado[(consolidado["Alimentador"] == "NW08") & (consolidado["Cenario"] == "Rede 120%")].to_dict('records')
+    res_120  = consolidado[(consolidado["Alimentador"] != "NW08") & (consolidado["Cenario"] == "Rede 120%")].to_dict('records')
     
     gerar_relatorio_texto(
         pasta_comp,
         nw08_100[0] if nw08_100 else None,
         res_100[0] if res_100 else None,
-        nw08_160[0] if nw08_160 else None,
-        res_160[0] if res_160 else None,
+        nw08_120[0] if nw08_120 else None,
+        res_120[0] if res_120 else None,
     )
     print(f"\n[Sucesso] Resultados comparativos consolidados em: {pasta_comp}")
 
@@ -2459,6 +2535,7 @@ def comparar_alimentadores(resumos_dict):
 
 def main():
     os.makedirs(PASTA_SAIDA, exist_ok=True)
+    carregar_impedancias_segcon(GDB_PATH)
 
     print("\n=== CONFIGURAÇÕES ATIVAS ===")
     for chave in ALIMENTADORES_ATIVOS:

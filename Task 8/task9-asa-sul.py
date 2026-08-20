@@ -28,7 +28,7 @@ import py_dss_interface
 # =============================================================================
 
 GDB_PATH = r"C:\Neoenergia_Brasilia_5160_2024-12-31_V11_20250929-1338.gdb"
-PASTA_SAIDA = r"c:/Users/caike/PycharmProjects/bdgdbrasilia"
+PASTA_SAIDA = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 ALIMENTADORES = [
     "ES11"
@@ -71,11 +71,12 @@ FP_BAIXO = 0.85
 #    {"nome": "Rede 160%", "carregamento_rede": 1.60, "fp": 0.92},
 #]
 CENARIOS_REDE = [
+    {"nome": "Rede 20%", "carregamento_rede": 0.20, "fp": 0.92},
+    {"nome": "Rede 40%", "carregamento_rede": 0.40, "fp": 0.92},
     {"nome": "Base 60%", "carregamento_rede": 0.60, "fp": 0.92},
     {"nome": "Rede 80%", "carregamento_rede": 0.80, "fp": 0.92},
     {"nome": "Rede 100%", "carregamento_rede": 1.00, "fp": 0.92},
     {"nome": "Rede 120%", "carregamento_rede": 1.20, "fp": 0.92},
-    {"nome": "Rede 160%", "carregamento_rede": 1.60, "fp": 0.92},
 ]
 
 # Ensaio localizado no transformador-alvo (FP8401 – 300 kVA).
@@ -283,6 +284,62 @@ def diagnostico_comprimentos_df(ssdmt):
 # =============================================================================
 
 
+IMPEDANCIAS_SEGCON = {}
+
+
+def carregar_impedancias_segcon(gdb_path):
+    """Carrega R1/X1 oficiais da tabela SEGCON da própria BDGD."""
+    global IMPEDANCIAS_SEGCON
+
+    segcon = gpd.read_file(gdb_path, layer="SEGCON")
+    colunas = {str(col).upper(): col for col in segcon.columns}
+    obrigatorias = ["COD_ID", "R1", "X1"]
+    ausentes = [col for col in obrigatorias if col not in colunas]
+    if ausentes:
+        raise KeyError(f"SEGCON sem as colunas obrigatórias: {ausentes}")
+
+    mapa = {}
+    for _, row in segcon.iterrows():
+        codigo = str(row[colunas["COD_ID"]]).strip()
+        r1 = limpar_numero(row[colunas["R1"]])
+        x1 = limpar_numero(row[colunas["X1"]])
+        if codigo and pd.notna(r1) and pd.notna(x1) and r1 > 0 and x1 > 0:
+            mapa[codigo] = (r1, x1)
+
+    if not mapa:
+        raise ValueError("Nenhuma impedância válida foi carregada da SEGCON.")
+
+    IMPEDANCIAS_SEGCON = mapa
+    print(f"Impedâncias carregadas da SEGCON: {len(mapa)} tipos de condutor")
+
+
+def diagnosticar_cobertura_segcon(ssdmt):
+    """Confere a cobertura dos TIP_CND e resume a impedância aplicada."""
+    tipos = ssdmt["TIP_CND"].astype(str).str.strip()
+    cobertos = tipos.isin(IMPEDANCIAS_SEGCON)
+    faltantes = sorted(tipos[~cobertos].unique())
+
+    print("\n--- Diagnóstico de impedâncias SEGCON ---")
+    print(f"Trechos cobertos pela SEGCON: {int(cobertos.sum())}/{len(ssdmt)}")
+    if faltantes:
+        print(f"TIP_CND sem correspondência: {faltantes}")
+
+    if cobertos.any():
+        comprimentos = ssdmt.loc[cobertos, "COMPRIMENTO_REAL_KM"].astype(float)
+        r1 = tipos.loc[cobertos].map(lambda codigo: IMPEDANCIAS_SEGCON[codigo][0])
+        x1 = tipos.loc[cobertos].map(lambda codigo: IMPEDANCIAS_SEGCON[codigo][1])
+        peso_total = comprimentos.sum()
+        r1_ponderado = (r1 * comprimentos).sum() / peso_total
+        x1_ponderado = (x1 * comprimentos).sum() / peso_total
+        print(f"R1 médio ponderado pelo comprimento: {r1_ponderado:.4f} ohm/km")
+        print(f"X1 médio ponderado pelo comprimento: {x1_ponderado:.4f} ohm/km")
+
+    if faltantes:
+        warnings.warn(
+            "Há trechos sem R1/X1 na SEGCON; somente esses trechos usarão fallback."
+        )
+
+
 def obter_impedancia_linha(row, length_km):
     """
     [A12] Tenta usar impedâncias reais da BDGD.
@@ -302,6 +359,11 @@ def obter_impedancia_linha(row, length_km):
 
     if r1 is not None and x1 is not None:
         return r1, x1, "real_bdgd"
+
+    tip_cnd = str(row.get("TIP_CND", "")).strip()
+    if tip_cnd in IMPEDANCIAS_SEGCON:
+        r1_segcon, x1_segcon = IMPEDANCIAS_SEGCON[tip_cnd]
+        return r1_segcon, x1_segcon, "segcon_bdgd"
 
     if USAR_IMPEDANCIA_CONSERVADORA:
         if length_km < 0.1:
@@ -1267,7 +1329,7 @@ def simular_cenario(
         length = comprimento_km_linha(row)
         r1, x1, origem_imp = obter_impedancia_linha(row, length)
 
-        if origem_imp == "real_bdgd":
+        if origem_imp in {"real_bdgd", "segcon_bdgd"}:
             imp_real += 1
         else:
             imp_estimada += 1
@@ -1649,6 +1711,7 @@ def processar_alimentador(alim_id, ssdmt_orig, untrmt, unsemt):
     # [A1] Comprimento pela geometria
     # ------------------------------------------------------------------
     ssdmt, ssdmt_geo = calcular_comprimentos_geometria(ssdmt_orig)
+    diagnosticar_cobertura_segcon(ssdmt)
 
     # ------------------------------------------------------------------
     # [A4] Diagnóstico das chaves
@@ -2038,8 +2101,8 @@ def gerar_graficos(alim_id, resumo, detalhes):
     # Cenários para perfis ao longo da distância
     cenarios_perfil = [
         c for c in [
-            "Base 60%", "Rede 100%", "Rede 160%",
-            "Rede 160% FP baixo", "Trafo alvo 100%", "Trafo alvo 150%",
+            "Rede 20%", "Rede 40%", "Base 60%", "Rede 80%",
+            "Rede 100%", "Rede 120%", "Trafo alvo 100%", "Trafo alvo 150%",
         ]
         if c in detalhes
     ]
@@ -2234,6 +2297,7 @@ def gerar_mapa(alim_id, ssdmt_geo, topo, trafo_alvo, pac_inicial, metodo_origem)
 
 def main():
     os.makedirs(PASTA_SAIDA, exist_ok=True)
+    carregar_impedancias_segcon(GDB_PATH)
 
     filtro = " OR ".join([f"CTMT = '{a}'" for a in ALIMENTADORES])
 

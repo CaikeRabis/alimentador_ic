@@ -12,7 +12,7 @@
 #   3.  Confirmar parâmetros metodológicos idênticos ao CN15
 #   4.  Auditar impedâncias (TIP_CND / R1 / X1 / origem)
 #   5.  Diagnóstico topológico completo
-#   6.  Cenários de carregamento: 60/80/100/120/160%
+#   6.  Cenários de carregamento: 20/40/60/80/100/120%
 #   7.  Validar Vmin (20 menores tensões + auditoria barra crítica)
 #   8.  Faixas de tensão por cenário
 #   9.  Tabelas comparativas com CN15
@@ -62,11 +62,12 @@ CODIGO_CN15 = "CN15"
 
 # Resultados conhecidos do CN15 por cenario (hardcoded - auditados)
 CN15_RESULTADOS = {
-    "Base 60%":  {"vmin": 0.8453, "vmean": 0.8639},
-    "Rede 80%":  {"vmin": 0.8047, "vmean": 0.8280},
-    "Rede 100%": {"vmin": 0.7684, "vmean": 0.7959},
-    "Rede 120%": {"vmin": 0.7356, "vmean": 0.7669},
-    "Rede 160%": {"vmin": 0.6790, "vmean": 0.7167},
+    "Rede 20%":  {"vmin": 0.947540, "vmean": 0.972447},
+    "Rede 40%":  {"vmin": 0.899403, "vmean": 0.946117},
+    "Base 60%":  {"vmin": 0.856327, "vmean": 0.922294},
+    "Rede 80%":  {"vmin": 0.817410, "vmean": 0.900433},
+    "Rede 100%": {"vmin": 0.782030, "vmean": 0.880212},
+    "Rede 120%": {"vmin": 0.749770, "vmean": 0.861452},
 }
 CN15_ESTRUTURA = {
     "trechos_mt":            1920,
@@ -74,8 +75,8 @@ CN15_ESTRUTURA = {
     "potencia_instalada_kva": 13300,
     "comprimento_total_km":   128.5,
     "distancia_eletrica_km":  16.42,
-    "r1_medio":               0.3331,
-    "r1_mediano":             0.2920,
+    "r1_medio":               1.252664,
+    "r1_mediano":             1.5289,
 }
 
 # Parametros metodologicos - IDENTICOS ao CN15 (nao alterar)
@@ -91,11 +92,12 @@ TIPO_SIMULACAO = "Snapshot estatico"
 
 # Cenarios principais - exatamente os mesmos do CN15
 CENARIOS_REDE = [
+    {"nome": "Rede 20%",  "carregamento_rede": 0.20, "fp": FP_BASE},
+    {"nome": "Rede 40%",  "carregamento_rede": 0.40, "fp": FP_BASE},
     {"nome": "Base 60%",  "carregamento_rede": 0.60, "fp": FP_BASE},
     {"nome": "Rede 80%",  "carregamento_rede": 0.80, "fp": FP_BASE},
     {"nome": "Rede 100%", "carregamento_rede": 1.00, "fp": FP_BASE},
     {"nome": "Rede 120%", "carregamento_rede": 1.20, "fp": FP_BASE},
-    {"nome": "Rede 160%", "carregamento_rede": 1.60, "fp": FP_BASE},
 ]
 
 # Criterios para selecao do segundo alimentador
@@ -109,6 +111,37 @@ SIMULAR = True
 
 # Referencia ao 0,93 p.u. (limiar de carregamento do modelo)
 LIMIAR_VMIN_PU = 0.93
+
+PONTE_CN12_BUS1 = "SCN_CN12_9158_CEIRJ001_ATV"
+PONTE_CN12_BUS2 = "SCN_CN12_9121_CEI054"
+PONTE_CN12_COMPRIMENTO_KM = 0.014799
+
+IMPEDANCIAS_SEGCON = {}
+
+
+def carregar_impedancias_segcon(gdb_path):
+    """Carrega R1/X1 oficiais por TIP_CND a partir da camada SEGCON."""
+    global IMPEDANCIAS_SEGCON
+
+    segcon = gpd.read_file(gdb_path, layer="SEGCON")
+    colunas = {str(col).upper(): col for col in segcon.columns}
+    ausentes = [col for col in ["COD_ID", "R1", "X1"] if col not in colunas]
+    if ausentes:
+        raise KeyError(f"SEGCON sem as colunas obrigatorias: {ausentes}")
+
+    mapa = {}
+    for _, row in segcon.iterrows():
+        codigo = str(row[colunas["COD_ID"]]).strip()
+        r1 = limpar_numero(row[colunas["R1"]])
+        x1 = limpar_numero(row[colunas["X1"]])
+        if codigo and pd.notna(r1) and pd.notna(x1) and r1 > 0 and x1 > 0:
+            mapa[codigo] = (r1, x1)
+
+    if not mapa:
+        raise ValueError("Nenhuma impedancia valida foi carregada da SEGCON.")
+    IMPEDANCIAS_SEGCON = mapa
+    print(f"Impedancias carregadas da SEGCON: {len(mapa)} tipos de condutor")
+
 
 TABELA_IMPEDANCIA_TIP_CND = {
     "63_A4_3_1": (0.50, 0.35),
@@ -262,13 +295,14 @@ def construir_grafo(ssdmt, unsemt):
             "ciclos_euler":ciclos_euler,"ciclos_nx":ciclos_nx,"nos_folha_grau1":folhas}
     
     # PONTE TOPOLOGICA PARA CN12
-    b1_ponte = "SCN_CN12_9158_CEIRJ001_ATV"
-    b2_ponte = "SCN_CN12_9121_CEI054"
+    b1_ponte = PONTE_CN12_BUS1
+    b2_ponte = PONTE_CN12_BUS2
     if b1_ponte in grafo.nodes and b2_ponte in grafo.nodes:
-        grafo.add_edge(b1_ponte, b2_ponte, weight=0.015, tipo="chave_virtual", codigo="PONTE_VIRTUAL_CN12")
-        elementos[f"LINE.SW_PONTE_VIRTUAL_CN12"] = {"b1":b1_ponte, "b2":b2_ponte, "comprimento_km":0.015, "tipo":"chave"}
+        grafo.add_edge(b1_ponte, b2_ponte, weight=PONTE_CN12_COMPRIMENTO_KM, tipo="chave_virtual", codigo="PONTE_VIRTUAL_CN12")
+        elementos["LINE.SW_PONTE_VIRTUAL_CN12"] = {"b1":b1_ponte, "b2":b2_ponte, "comprimento_km":PONTE_CN12_COMPRIMENTO_KM, "tipo":"chave"}
         diag["arestas"] += 1
         diag["chaves_fechadas"] += 1
+        diag["componentes"] = nx.number_connected_components(grafo)
     
     return grafo, elementos, diag
 
@@ -288,20 +322,29 @@ def analisar_topologia(grafo, pac_inicial, diag_grafo):
             "caminho_origem_ponta":caminho}
 
 def escolher_pac_inicial(ssdmt, grafo, gdb_path, pac_manual=None):
-    maior = max(nx.connected_components(grafo), key=len)
-    sub = grafo.subgraph(maior).copy()
-    ini = next(iter(sub.nodes))
-    d1 = nx.single_source_dijkstra_path_length(sub, ini, weight="weight")
-    p1 = max(d1, key=d1.get)
-    d2 = nx.single_source_dijkstra_path_length(sub, p1, weight="weight")
-    p2 = max(d2, key=d2.get)
-    origem = p1 if sub.degree(p1)<=sub.degree(p2) else p2
-    return origem, "provisorio - extremidade topologica"
+    if pac_manual:
+        origem = bus(pac_manual)
+        if origem not in grafo:
+            raise ValueError(f"PAC manual ausente do grafo: {origem}")
+        return origem, "manual (PAC_INICIAL_MANUAL)"
+
+    alim_id = str(ssdmt.iloc[0].get("CTMT", "")).strip()
+    ctmt = gpd.read_file(gdb_path, layer="CTMT", where=f"COD_ID = '{alim_id}'")
+    if not ctmt.empty and "PAC_INI" in ctmt.columns:
+        origem = bus(ctmt.iloc[0]["PAC_INI"])
+        if origem in grafo:
+            return origem, "CTMT coluna 'PAC_INI'"
+        raise ValueError(f"PAC_INI oficial '{origem}' ausente do grafo de {alim_id}.")
+
+    raise ValueError(f"Nao foi possivel obter PAC_INI oficial para {alim_id}.")
 
 def obter_impedancia_linha(row, length_km):
     col_tip = obter_coluna_existente(row.to_frame().T, ["TIP_CND","TIPO_CND","TIP_COND"])
     if col_tip:
         tip = str(row[col_tip]).strip()
+        if tip in IMPEDANCIAS_SEGCON:
+            r1, x1 = IMPEDANCIAS_SEGCON[tip]
+            return r1, x1, "segcon_bdgd"
         if tip in TABELA_IMPEDANCIA_TIP_CND:
             r1, x1 = TABELA_IMPEDANCIA_TIP_CND[tip]
             return r1, x1, "tabela_tip_cnd"
@@ -552,7 +595,7 @@ def auditar_impedancias(ssdmt):
         tip = str(row[col_tip]).strip() if col_tip else "N/D"
         r1_vals.append(r1)
         x1_vals.append(x1)
-        if origem == "real_bdgd": qtd_real += 1
+        if origem in {"real_bdgd", "segcon_bdgd"}: qtd_real += 1
         elif origem == "tabela_tip_cnd": qtd_tabela += 1
         else: qtd_estimada += 1
         
@@ -571,7 +614,12 @@ def auditar_impedancias(ssdmt):
             .agg(quantidade=("R1","count"), R1_medio=("R1","mean"), X1_medio=("X1","mean"))
             .reset_index().sort_values("quantidade", ascending=False)
         )
-        df_tip["Origem"] = "estimada_conservadora" if qtd_real == 0 else "misto_BDGD_estimada"
+        if qtd_real == len(df_audit):
+            df_tip["Origem"] = "SEGCON_BDGD"
+        elif qtd_real == 0:
+            df_tip["Origem"] = "estimada_conservadora"
+        else:
+            df_tip["Origem"] = "misto_BDGD_estimada"
     else:
         df_tip = pd.DataFrame({
             "TIP_CND": ["N/D"],
@@ -681,7 +729,7 @@ def simular_cenario_local(
         cod    = clean_id(row["COD_ID"])
         length = comprimento_km_linha(row)
         r1, x1, orig = obter_impedancia_linha(row, length)
-        if orig == "real_bdgd": imp_real += 1
+        if orig in {"real_bdgd", "segcon_bdgd"}: imp_real += 1
         else:                    imp_estimada += 1
         dss.text(
             f"New Line.L_{cod} bus1={b1} bus2={b2} phases=3 "
@@ -697,6 +745,16 @@ def simular_cenario_local(
         dss.text(
             f"New Line.SW_{cod} bus1={b1} bus2={b2} phases=3 "
             f"length=0.00001 units=km r1=0.001 x1=0.001 c1=0"
+        )
+
+    # Reparo topologico validado por uma lacuna geografica de 14,8 m na BDGD.
+    # A mesma conexao precisa existir no OpenDSS, nao apenas no grafo NetworkX.
+    if alim_id == "CN12":
+        dss.text(
+            f"New Line.SW_PONTE_VIRTUAL_CN12 "
+            f"bus1={PONTE_CN12_BUS1} bus2={PONTE_CN12_BUS2} phases=3 "
+            f"length={PONTE_CN12_COMPRIMENTO_KM:.6f} units=km "
+            f"r1=0.001 x1=0.001 c1=0"
         )
 
     pot_total_kw = pot_total_kva = 0.0
@@ -943,7 +1001,7 @@ def imprimir_tabelas_comparativas(alim_id, resumo_lista):
     print("ETAPA 9 - COMPARACAO DIRETA COM CN15")
     print("=" * 60)
 
-    cenarios_p = ["Base 60%", "Rede 80%", "Rede 100%", "Rede 120%", "Rede 160%"]
+    cenarios_p = list(CN15_RESULTADOS)
     res_novo   = {r["Cenario"]: r for r in resumo_lista}
 
     print(f"\n  Tabela Vmin (p.u.):")
@@ -980,8 +1038,8 @@ def gerar_graficos_comparativos(alim_id, pasta_comp, resumo_lista, tensoes_por_c
     pasta_graf = os.path.join(pasta_comp, "graficos_comparativos")
     os.makedirs(pasta_graf, exist_ok=True)
 
-    cenarios_p  = ["Base 60%", "Rede 80%", "Rede 100%", "Rede 120%", "Rede 160%"]
-    labels_x    = ["60%", "80%", "100%", "120%", "160%"]
+    cenarios_p  = list(CN15_RESULTADOS)
+    labels_x    = ["20%", "40%", "60%", "80%", "100%", "120%"]
     res_novo    = {r["Cenario"]: r for r in resumo_lista}
 
     cn15_vmins  = [CN15_RESULTADOS.get(c, {}).get("vmin",  np.nan) for c in cenarios_p]
@@ -1055,9 +1113,13 @@ def gerar_graficos_comparativos(alim_id, pasta_comp, resumo_lista, tensoes_por_c
                    c=cor_novo, s=8, alpha=0.5, label=f"{alim_id} (barras MT)")
         df_ord = df_t.sort_values("Distancia_km")
         if len(df_ord) > 50:
-            from scipy.ndimage import uniform_filter1d
             size  = max(10, len(df_ord)//30)
-            y_sm  = uniform_filter1d(df_ord["Tensao_pu"].values, size=size)
+            y_sm = (
+                df_ord["Tensao_pu"]
+                .rolling(window=size, center=True, min_periods=1)
+                .mean()
+                .to_numpy()
+            )
             ax.plot(df_ord["Distancia_km"], y_sm, color=cor_novo, lw=2, label="Tendencia suavizada")
     ax.axhline(0.93, color="red",    lw=1.4, ls="--", label="0,93 p.u.")
     ax.axhline(0.90, color="darkred", lw=1.0, ls=":",  label="0,90 p.u.")
@@ -1103,7 +1165,7 @@ def imprimir_tabela_estrutural(alim_id, imp_stats, topo, soma_pot_kva, resumo_li
         ("Vmin 60%",             f"{CN15_RESULTADOS['Base 60%']['vmin']:.4f}",              _gv("Tensao_Minima_pu","Base 60%")),
         ("Vmean 60%",            f"{CN15_RESULTADOS['Base 60%']['vmean']:.4f}",             _gv("Tensao_Media_pu","Base 60%")),
         ("Vmin 100%",            f"{CN15_RESULTADOS['Rede 100%']['vmin']:.4f}",             _gv("Tensao_Minima_pu","Rede 100%")),
-        ("Vmin 160%",            f"{CN15_RESULTADOS['Rede 160%']['vmin']:.4f}",             _gv("Tensao_Minima_pu","Rede 160%")),
+        ("Vmin 120%",            f"{CN15_RESULTADOS['Rede 120%']['vmin']:.4f}",             _gv("Tensao_Minima_pu","Rede 120%")),
     ]
 
     print(f"\n  {'Indicador':<25} {'CN15':>18} {alim_id:>18}")
@@ -1381,7 +1443,7 @@ def gerar_relatorio_final(
     res_novo = {r["Cenario"]: r for r in resumo_lista}
     add(f"  {'Cenario':<12} {'CN15 Vmin':>10} {'Novo Vmin':>10} {'Delta':>8} {'CN15 Vmean':>11} {'Novo Vmean':>11}")
     add("  " + "-" * 65)
-    for cen in ["Base 60%","Rede 80%","Rede 100%","Rede 120%","Rede 160%"]:
+    for cen in CN15_RESULTADOS:
         cv  = CN15_RESULTADOS.get(cen, {}).get("vmin",  np.nan)
         cvm = CN15_RESULTADOS.get(cen, {}).get("vmean", np.nan)
         nv  = res_novo.get(cen, {}).get("Tensao_Minima_pu",  np.nan)
@@ -1410,7 +1472,7 @@ def gerar_relatorio_final(
     add("  - Modelo de carga simplificado (model=1, potencia constante)")
     add("  - Impedancias de transformadores estimadas (%R=1.2, XHL=4.5)")
     add("  - Cenarios de carregamento globais (sem demanda real calibrada)")
-    add("  - Origem do alimentador por metodo topologico (provisorio)")
+    add("  - Origem oficial obtida da coluna PAC_INI da camada CTMT")
     add("  - Carga uniformemente distribuida entre todos os transformadores")
     add("  - Resultados sao condicoes simuladas sob as hipoteses adotadas")
     add("  - Nao afirmar automaticamente violacao PRODIST")
@@ -1486,6 +1548,7 @@ def main():
     print("=" * 72)
     print(f"\nReferencia: {CODIGO_CN15} (resultados hardcoded)")
     print(f"SIMULAR = {SIMULAR}")
+    carregar_impedancias_segcon(GDB_PATH)
 
     # ETAPAS 1-2: Selecao
     candidatos, ssdmt_all_cn, untrmt_all_cn, unsemt_all_cn = listar_candidatos_ceilandia(
